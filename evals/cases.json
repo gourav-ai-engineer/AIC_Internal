@@ -1,0 +1,232 @@
+{
+ "description": "Hand-labelled cases for ProofPilot's verifier. 'grounding': does SOURCE support CLAIM? 'conflict': do A and B contradict? Includes deliberately hard cases (paraphrases, near-misses) so the numbers reflect real limits.",
+ "grounding": [
+  {
+   "claim": "Python 3.12 was released in October 2023.",
+   "source": "The Python Software Foundation released Python 3.12 on 2 October 2023, with improved error messages.",
+   "supported": true
+  },
+  {
+   "claim": "LangGraph lets developers build stateful multi-agent workflows as graphs.",
+   "source": "LangGraph is a library for building stateful, multi-actor applications with LLMs, modelling agent workflows as graphs.",
+   "supported": true
+  },
+  {
+   "claim": "Rust guarantees memory safety without a garbage collector.",
+   "source": "Rust achieves memory safety without garbage collection through its ownership and borrowing system.",
+   "supported": true
+  },
+  {
+   "claim": "The Eiffel Tower is located in Paris.",
+   "source": "Standing on the Champ de Mars in Paris, the Eiffel Tower was completed in 1889.",
+   "supported": true
+  },
+  {
+   "claim": "Intermittent fasting can lead to weight loss in adults.",
+   "source": "Several randomized trials found that adults following intermittent fasting achieved modest weight loss.",
+   "supported": true
+  },
+  {
+   "claim": "Streamlit is an open-source Python framework for data apps.",
+   "source": "Streamlit is an open-source Python framework that lets data scientists build interactive data apps quickly.",
+   "supported": true
+  },
+  {
+   "claim": "The hackathon accepts teams of up to three people.",
+   "source": "You can compete either solo or in a team of up to 3 people.",
+   "supported": true
+  },
+  {
+   "claim": "Vector databases store embeddings for similarity search.",
+   "source": "A vector database indexes and stores embeddings so that similarity search over them is fast.",
+   "supported": true
+  },
+  {
+   "claim": "Gemini 2.5 Flash is available on a free tier.",
+   "source": "Developers can use Gemini 2.5 Flash on the free tier of the Gemini API with rate limits.",
+   "supported": true
+  },
+  {
+   "claim": "Solar panel efficiency declines slightly each year.",
+   "source": "Most photovoltaic modules lose roughly 0.5 percent of their output per year as they age.",
+   "supported": true
+  },
+  {
+   "claim": "Many students use AI chatbots for homework help.",
+   "source": "Surveys show a large share of learners now ask generative assistants for help with assignments.",
+   "supported": true
+  },
+  {
+   "claim": "Docker containers share the host operating system kernel.",
+   "source": "Unlike virtual machines, containers run on the host's kernel rather than booting their own.",
+   "supported": true
+  },
+  {
+   "claim": "Python 3.12 was released in October 2023.",
+   "source": "Python 3.11 brought major speed improvements and was released in 2022.",
+   "supported": false
+  },
+  {
+   "claim": "LangGraph was created by Microsoft.",
+   "source": "LangGraph is developed by LangChain Inc. as part of the LangChain ecosystem.",
+   "supported": false
+  },
+  {
+   "claim": "Rust has a built-in garbage collector.",
+   "source": "Go uses a concurrent garbage collector to manage memory automatically.",
+   "supported": false
+  },
+  {
+   "claim": "The Eiffel Tower is 500 metres tall.",
+   "source": "The Burj Khalifa in Dubai is about 828 metres tall and is the tallest building in the world.",
+   "supported": false
+  },
+  {
+   "claim": "Intermittent fasting cures type 1 diabetes.",
+   "source": "Intermittent fasting has been studied for weight loss, with mixed results on metabolic markers.",
+   "supported": false
+  },
+  {
+   "claim": "Streamlit requires a paid licence for commercial use.",
+   "source": "Flask is a lightweight WSGI web application framework written in Python.",
+   "supported": false
+  },
+  {
+   "claim": "The hackathon deadline is in December.",
+   "source": "Participants must join the community Discord to receive updates about prizes.",
+   "supported": false
+  },
+  {
+   "claim": "Vector databases replace relational databases entirely.",
+   "source": "Graph databases store nodes and edges and are optimised for relationship queries.",
+   "supported": false
+  },
+  {
+   "claim": "Quantum computers can already break all RSA encryption.",
+   "source": "Researchers estimate that breaking RSA-2048 would require millions of stable qubits, far beyond current machines.",
+   "supported": false
+  },
+  {
+   "claim": "Coffee consumption causes dehydration.",
+   "source": "Moderate coffee intake contributes to daily fluid needs, according to a review of hydration studies.",
+   "supported": false
+  },
+  {
+   "claim": "The Great Wall of China is visible from space with the naked eye.",
+   "source": "The Great Wall of China stretches thousands of kilometres across northern China and attracts millions of visitors.",
+   "supported": false
+  },
+  {
+   "claim": "Streamlit apps can be deployed for free on Community Cloud.",
+   "source": "You can deploy Streamlit apps for free on Streamlit Community Cloud directly from a GitHub repository.",
+   "supported": true
+  }
+ ],
+ "conflict": [
+  {
+   "a": "Independent reviews report that LangGraph has a steep learning curve for beginners.",
+   "b": "Independent reviews report that LangGraph is easy for beginners and has no learning curve.",
+   "contradict": true
+  },
+  {
+   "a": "The submission deadline for the hackathon is 12 October 2026.",
+   "b": "The submission deadline for the hackathon is 15 October 2026.",
+   "contradict": true
+  },
+  {
+   "a": "The framework is free and open-source for students.",
+   "b": "The framework is proprietary and paid for students.",
+   "contradict": true
+  },
+  {
+   "a": "Benchmarks show the model is faster than its predecessor.",
+   "b": "Benchmarks show the model is slower than its predecessor.",
+   "contradict": true
+  },
+  {
+   "a": "Remote work increased employee productivity in the study.",
+   "b": "Remote work decreased employee productivity in the study.",
+   "contradict": true
+  },
+  {
+   "a": "The vaccine is safe for children over five years old.",
+   "b": "The vaccine is not safe for children over five years old.",
+   "contradict": true
+  },
+  {
+   "a": "The library supports Python 3.8 and later versions.",
+   "b": "The library does not support Python 3.8 or later versions.",
+   "contradict": true
+  },
+  {
+   "a": "The city population grew to 2.1 million residents in 2024.",
+   "b": "The city population grew to 1.4 million residents in 2024.",
+   "contradict": true
+  },
+  {
+   "a": "Students are eligible to enter the competition individually.",
+   "b": "Students are ineligible to enter the competition individually.",
+   "contradict": true
+  },
+  {
+   "a": "Electric cars have lower lifetime emissions than petrol cars.",
+   "b": "Electric cars have higher lifetime emissions than petrol cars.",
+   "contradict": true
+  },
+  {
+   "a": "Most experts now say the policy failed to reduce traffic.",
+   "b": "Analysts concluded the policy was a success at cutting congestion.",
+   "contradict": true
+  },
+  {
+   "a": "Independent reviews report that LangGraph has a steep learning curve for beginners.",
+   "b": "LangGraph's documentation includes tutorials for beginners.",
+   "contradict": false
+  },
+  {
+   "a": "The submission deadline for the hackathon is 12 October 2026.",
+   "b": "The hackathon has 64 registered participants.",
+   "contradict": false
+  },
+  {
+   "a": "The framework is free and open-source for students.",
+   "b": "The framework is free and open-source and popular with students.",
+   "contradict": false
+  },
+  {
+   "a": "Benchmarks show the model is faster than its predecessor.",
+   "b": "The model was released in March with a new tokenizer.",
+   "contradict": false
+  },
+  {
+   "a": "Remote work increased employee productivity in the study.",
+   "b": "Remote work increased employee productivity and satisfaction in the study.",
+   "contradict": false
+  },
+  {
+   "a": "The vaccine is safe for children over five years old.",
+   "b": "Doctors recommend the vaccine for children over five years old.",
+   "contradict": false
+  },
+  {
+   "a": "The library supports Python 3.8 and later versions.",
+   "b": "The library is distributed on PyPI under the MIT licence.",
+   "contradict": false
+  },
+  {
+   "a": "The city population grew to 2.1 million residents in 2024.",
+   "b": "The city opened two new metro lines in 2024.",
+   "contradict": false
+  },
+  {
+   "a": "Electric cars have lower lifetime emissions than petrol cars.",
+   "b": "Battery production accounts for a large share of an electric car's manufacturing emissions.",
+   "contradict": false
+  },
+  {
+   "a": "Rust guarantees memory safety without a garbage collector.",
+   "b": "Rust does not use a garbage collector, relying on ownership instead.",
+   "contradict": false
+  }
+ ]
+}
