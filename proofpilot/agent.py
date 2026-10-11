@@ -471,7 +471,8 @@ class ResearchAgent:
         cited = self._select_cited()
         by_sid = {e.sid: e for e in cited}
         report, synthesis = None, "local extractive (no LLM)"
-        if self.llm and not self.llm_down and cited:
+        # synthesis is attempted even if the decision circuit breaker tripped: the quota may have recovered
+        if self.llm and cited:
             self.log("synthesize", f"Writing a grounded brief from {len(cited)} cited sources with {self.llm.label}")
             try:
                 report = synthesize_llm(self.goal, self.subquestions, cited, self.llm, self.today)

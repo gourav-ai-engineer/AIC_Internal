@@ -29,6 +29,11 @@ SKEPTIC_SUFFIXES = ("limitations criticism problems", "risks drawbacks", "failur
 CORE_SUFFIXES = ("official documentation", "explained guide", "report pdf", "analysis")
 
 
+_LEAD_VERBS = re.compile(
+    r"^(?:please\s+)?(?:compare|research|investigate|find(?: out)?|explain|summari[sz]e|analy[sz]e|evaluate|"
+    r"review|explore|study|assess|tell me about|help me (?:understand|choose|decide)|what (?:is|are)|"
+    r"how (?:do|does|can|to)|should (?:i|we))\s+", re.IGNORECASE)
+
 def classify_intents(goal: str) -> list[str]:
     found = [name for name, pattern in INTENT_RULES if re.search(pattern, goal, re.IGNORECASE)]
     return found or ["general"]
@@ -49,15 +54,12 @@ def extract_entities(goal: str) -> list[str]:
         m = re.search(r"\b(?:compare|comparing|between)\s+(.+?)(?:\s+(?:for|in|on|including|based on|to decide|"
                       r"when|regarding)\b|[.;:?]|$)", text, re.IGNORECASE)
         parts = re.split(r",\s*(?:and\s+|or\s+)?|\s+and\s+|\s+or\s+", m.group(1)) if m else []
-    entities = [clean(re.sub(r"^(?:the|a|an)\s+", "", p, flags=re.IGNORECASE)) for p in parts]
+    entities = [clean(re.sub(r"^(?:the|a|an)\s+", "", _LEAD_VERBS.sub("", p.strip()), flags=re.IGNORECASE))
+                for p in parts]
     entities = [e for e in entities if e and len(e) <= 40 and len(e.split()) <= 4]
     return entities[:4] if len(entities) >= 2 else []
 
 
-_LEAD_VERBS = re.compile(
-    r"^(?:please\s+)?(?:compare|research|investigate|find(?: out)?|explain|summari[sz]e|analy[sz]e|evaluate|"
-    r"review|explore|study|assess|tell me about|help me (?:understand|choose|decide)|what (?:is|are)|"
-    r"how (?:do|does|can|to)|should (?:i|we))\s+", re.IGNORECASE)
 _CUT = re.compile(r"\s+(?:for|including|using|within|in the (?:next|last|past)|to (?:decide|help|choose)|so that|"
                   r"and (?:verify|check|confirm|include))\b|[,;:?]|\.(?:\s|$)", re.IGNORECASE)
 _TRAILING = re.compile(r"\s+(?:in|on|of|to|and|or|with|at|by|the|a|an|can|is|are)$", re.IGNORECASE)

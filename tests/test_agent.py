@@ -130,7 +130,7 @@ class LLMLoopTests(unittest.TestCase):
         self.assertEqual(r["policy"], "heuristic")
         self.assertIn("local extractive", r["synthesis_mode"])
         self.assertTrue(any("circuit breaker" in e["message"] for e in r["events"]))
-        self.assertLessEqual(llm.calls, 2)  # stops calling a broken model
+        self.assertLessEqual(llm.calls, 3)  # plan + first decision, then one last synthesis attempt
 
     def test_heuristic_policy_never_calls_llm_for_decisions(self):
         llm = FakeLLM()

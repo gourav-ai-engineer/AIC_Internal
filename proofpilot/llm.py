@@ -98,8 +98,8 @@ class LLMClient:
             raise LLMError(f"HTTP {r.status_code}", r.status_code)
 
     def complete(self, prompt: str, *, json_mode: bool = False, temperature: float = 0.2,
-                 max_tokens: int = 1500, retries: int = 1) -> str:
-        """Send one prompt; retry once on rate limits / server errors / network failures."""
+                 max_tokens: int = 1500, retries: int = 2) -> str:
+        """Send one prompt; retry on rate limits (with longer back-off), server errors and network failures."""
         send = self._gemini if self.provider == "gemini" else self._openai
         for attempt in range(retries + 1):
             self.calls += 1
@@ -112,7 +112,7 @@ class LLMClient:
                 code = ex.args[1] if isinstance(ex, LLMError) and len(ex.args) > 1 else None
                 retryable = code is None or code == 429 or code >= 500
                 if attempt < retries and retryable:
-                    time.sleep(1.5 * (attempt + 1))
+                    time.sleep((4.0 if code == 429 else 1.5) * (attempt + 1))  # free tiers allow ~10 req/min
                     continue
                 self.failures += 1
                 reason = str(ex.args[0]) if isinstance(ex, LLMError) and ex.args else type(ex).__name__

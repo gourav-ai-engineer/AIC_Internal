@@ -30,7 +30,7 @@ def confidence(domains: int, grounding: float, mean_credibility: float) -> str:
         return "Unsupported"
     if domains >= 3 or (domains == 2 and mean_credibility >= 0.7):
         return "High"
-    if domains == 2 or (domains == 1 and mean_credibility >= 0.8 and grounding >= 0.7):
+    if domains == 2:
         return "Medium"
     return "Low"
 
@@ -55,6 +55,8 @@ def audit(text: str, cited: list[str], by_sid: dict[str, Evidence]) -> Claim:
     weak = [s for s in valid if s not in supporting]
     if weak:
         notes.append(f"{', '.join(weak)} did not clearly contain this claim")
+    if domains == 1:
+        notes.append("single-source claim: needs independent confirmation")
     extra = [s for s in supporting if s not in valid]
     if extra:
         notes.append(f"also corroborated by {', '.join(extra)}")
@@ -97,7 +99,11 @@ def corroborate(evidence: list[Evidence], goal: str, max_claims: int = 8) -> lis
     for c in claims:
         if all(jaccard(content_terms(c.text), content_terms(u.text)) < 0.5 for u in unique):
             unique.append(c)
-    return unique[:max_claims]
+    # keep a couple of weakly-supported statements visible, so the user sees what is NOT corroborated
+    strong = [c for c in unique if c.domains >= 2][: max(1, max_claims - 2)]
+    weak = [c for c in unique if c.domains < 2]
+    rest = [c for c in unique if c.domains >= 2 and c not in strong]
+    return (strong + weak + rest)[:max_claims]
 
 
 def cited_ids(text: str) -> list[str]:

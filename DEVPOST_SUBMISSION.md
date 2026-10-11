@@ -1,58 +1,115 @@
-# Devpost submission draft — ProofPilot
+# Devpost submission — copy-paste ready
+
+> Fill in the two links marked **TODO** before submitting. Everything below describes features that exist in the
+> repository. Do not add numbers you have not measured yourself.
 
 ## Project name
-ProofPilot — Evidence-First Agentic Research
+ProofPilot — the research agent that doubts itself
 
-## Tagline
-A research agent that plans, searches, inspects, adapts, and leaves an evidence trail.
+## Tagline (≤ 200 chars)
+An autonomous research agent that plans, chooses its own tools, hunts for counter-evidence, and checks every claim
+against its sources before you see it.
 
-## What did you build?
-ProofPilot is a lightweight web app that transforms a broad research goal into a structured brief. It creates research questions, searches the public web, inspects promising pages, tracks source links and fetch status, reviews evidence coverage, optionally performs a follow-up search, and exports a Markdown report plus JSON run trace.
+## Links
+- Source code: https://github.com/gourav-ai-engineer/AIC_Internal
+- Demo video: **TODO** (YouTube / Vimeo, unlisted is fine)
+- Live app (optional): **TODO** (Streamlit Community Cloud URL)
 
-## Why is it agentic?
-It follows a bounded observe–decide–act workflow rather than producing a single response from one prompt:
-1. Plan research questions from the user's goal.
-2. Use live web search as a tool.
-3. Fetch and extract readable source-page text.
-4. Observe tool results and failures in a trace.
-5. Review coverage and adapt with a targeted follow-up when the inspected evidence is sparse.
-6. Synthesize a brief and expose the underlying evidence.
+---
 
-The run has a configurable budget, visible steps, and explicit limitations. Gemini synthesis is optional; a no-key fallback makes the workflow demonstrable without a paid API.
+## Inspiration
+Every student has asked an AI a research question and received a confident answer with a citation that doesn't say
+what the AI claimed, or doesn't exist at all. Chatbots answer once and never check themselves. We wanted an agent
+that behaves like a careful researcher: break the problem down, gather evidence from several places, look for
+reasons it might be wrong, and **verify before it speaks**.
 
-## Tools and technology
-- Python
-- Streamlit
-- DuckDuckGo search via the `ddgs` package
-- Requests and Beautiful Soup for source retrieval and text extraction
-- Optional Gemini API for synthesis
-- unittest and GitHub Actions workflow
+## What it does
+You give ProofPilot a goal, such as *"Compare LangGraph vs CrewAI vs AutoGen for a student project"*. It then works
+on its own:
 
-## Why this project?
-AI-generated research can sound confident even when its evidence is weak. ProofPilot makes tool use and evidence provenance visible, so a user can inspect the source, understand where the result came from, and identify what still needs verification.
+1. **Recalls** related past research from long-term memory and reuses trusted sources.
+2. **Plans** 3–5 sub-questions, always including a **skeptic pass** that looks for limitations and counter-evidence.
+3. **Runs a decide → act → observe loop.** At every step the controller chooses one tool (web search, news,
+   Wikipedia, arXiv, GitHub, or reading a full page) or decides to finish, and explains why.
+4. **Adapts.** Empty results trigger reformulated queries or a different tool. A failing tool is disabled by a
+   circuit breaker and work is rerouted. If the LLM is rate-limited, the agent switches to its heuristic controller
+   mid-run.
+5. **Reflects** on coverage: each sub-question needs evidence from 2+ independent domains and at least one fully
+   read page. The agent stops early when everything is covered.
+6. **Verifies.** Every finding is checked against the text of the sources it cites. Fabricated citations are
+   removed, unsupported claims are marked 🔴, single-source claims are marked 🟠, and claims backed by several
+   independent domains are marked 🟢.
+7. **Reports** a brief with clickable citations, an evidence ledger with credibility scores, the full decision
+   trace, a coverage view, an evidence map graph, and an overall **evidence strength** score. Downloads are
+   available as Markdown and JSON.
 
-## What is innovative?
-The experience emphasizes the research process as a first-class artifact: plan, tool observations, source diversity, extraction status, uncertainty, and downloadable trace are shown alongside the report. The design prioritizes inspectability over pretending a generated answer is automatically correct.
+## Why it is agentic
+ProofPilot is a goal-driven loop, not a single prompt:
+- **Planning:** goal decomposition with per-sub-question tool choices and a rationale.
+- **Tool use:** 6 tools with no required API keys, chosen dynamically at each step.
+- **Reasoning:** every decision records a "thought" (ReAct style), visible live in the UI.
+- **Observation and adaptation:** results, failures and coverage feed the next decision. Includes reformulation,
+  tool switching, circuit breakers and LLM fallback.
+- **Memory:** runs persist and related runs are recalled to seed new research.
+- **Autonomy with guardrails:** a hard tool budget and time limit, early stopping, a guard against finishing before
+  every sub-question has been researched, and a rule that the LLM may only fetch URLs a tool actually returned.
+- **Self-verification:** the agent audits its own output against the evidence.
+
+## How we built it
+- **Python** package `proofpilot/` with a clean module per responsibility: controller, planner, tools, LLM client,
+  verifier, credibility, report, memory, offline mode, CLI.
+- **Streamlit** dashboard that streams agent events live, plus a Graphviz evidence map.
+- **Tools:** DuckDuckGo search and news (`ddgs`), the Wikipedia API, the arXiv API, the GitHub search API, and a page
+  reader built on Requests and Beautiful Soup.
+- **LLM (optional):** a provider-agnostic client over plain HTTP for **Gemini**, **Groq**, any OpenAI-compatible
+  endpoint, or local **Ollama**, using JSON-mode prompts with strict validation.
+- **Verification:** lexical grounding (sentence-level and whole-text term coverage) and clustering across
+  independent domains.
+- **Safety:** prompt-injection detection and removal, an SSRF guard that re-checks every redirect, and API keys sent
+  in headers (never in URLs) and never stored.
+- **Quality:** 59 offline unit and behaviour tests, including a headless UI test, with GitHub Actions CI on
+  Python 3.10 and 3.12.
+
+## Challenges we ran into
+- **LLMs make up citations.** We stopped trusting the writer and built a verifier that re-reads the sources and
+  removes or downgrades anything it can't find.
+- **Free APIs fail and rate-limit.** We made failure a normal observation: circuit breakers for tools, a fallback
+  controller for the LLM, and a deterministic offline mode so the demo never depends on Wi-Fi.
+- **Web pages can attack agents.** Pages can contain text like "ignore previous instructions". We detect and strip
+  it before the model sees it, and lower that source's credibility.
+- **Knowing when to stop.** Coverage-based reflection lets the agent stop early instead of burning its budget.
+
+## Accomplishments we're proud of
+- The agent works **without any API key**, and the same loop gets smarter with an LLM.
+- Every claim in the report carries a confidence level that is explained, not just asserted.
+- The full trace makes the agent's behaviour auditable. Judges can see *why* each tool was chosen.
+
+## What we learned
+Agentic systems are mostly about handling the unhappy path: tools fail, models misbehave, and content is
+untrusted. Making the process observable made debugging, and trust, much easier.
+
+## What's next
+- Semantic (embedding-based) verification alongside lexical grounding.
+- Contradiction detection between sources.
+- Scheduled "watch this topic" runs that alert you when the evidence changes.
+- PDF reading and export.
+
+## Built with
+python · streamlit · requests · beautifulsoup4 · ddgs · wikipedia-api · arxiv-api · github-api · gemini · groq ·
+graphviz · github-actions
 
 ## How to run
-See the repository README. Install `requirements.txt`, run `streamlit run app.py`, enter a goal, and click **Run agent**. Internet access is needed for live search. Gemini is optional.
+See the [README](https://github.com/gourav-ai-engineer/AIC_Internal#quick-start-windows-powershell). In short:
+`pip install -r requirements.txt` then `streamlit run app.py`. No key is needed; for the best results add a free
+Gemini key. **Offline demo mode** works without internet.
 
-## Demo video outline
-1. Introduce the evidence problem (20 seconds).
-2. Enter a research goal and show the planner (20 seconds).
-3. Run the agent; point out live search, inspection, and coverage review (50 seconds).
-4. Open the evidence ledger and click an original source (45 seconds).
-5. Show the event trace and export the Markdown report (30 seconds).
-6. Close by explaining the bounded agent loop and limitations (15 seconds).
+---
 
-## Limitations and responsible use
-Search results can be incomplete or stale, and relevance scoring is heuristic rather than fact verification. ProofPilot does not guarantee completeness or correctness. Users should verify consequential claims at original sources and must not rely on the prototype alone for high-stakes decisions.
-
-## Final checklist before submission
-- [ ] Install dependencies and run the app locally.
-- [ ] Run `python -m unittest discover -s tests -v` and fix failures.
-- [ ] Complete at least one real live-search demo.
-- [ ] Record a real video; do not fabricate outcomes or metrics.
-- [ ] Check that no API keys or personal information appear in the repository or recording.
-- [ ] Add the real demo video URL and deployed app URL to Devpost if available.
-- [ ] Confirm the hackathon rules and submission deadline on Devpost.
+## Final checklist
+- [ ] `python -m unittest discover -v` passes on your machine.
+- [ ] One **live** run (offline mode off) completed with real sources, ideally with a Gemini key.
+- [ ] Demo video recorded (see `DEMO_SCRIPT.md`), uploaded, and the link added above.
+- [ ] No API key visible in the video, the screenshots or the repository.
+- [ ] Optional: deploy to Streamlit Community Cloud and add the URL.
+- [ ] Add 3–5 screenshots to the Devpost gallery: live trace, verified findings, evidence map, brief.
+- [ ] Submit before **Oct 12, 2026, 9:30 AM IST**.

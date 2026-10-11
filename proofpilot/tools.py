@@ -153,12 +153,17 @@ def github_search(query: str, max_results: int = 5) -> list[Evidence]:
     token = os.getenv("GITHUB_TOKEN", "").strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    q = " ".join(key_terms(query, 4)) or query
-    r = _get("https://api.github.com/search/repositories", params={"q": q, "per_page": max_results}, headers=headers)
-    try:
-        items = r.json().get("items", [])
-    except ValueError as ex:
-        raise ToolError("InvalidJSON") from ex
+    terms = [t for t in key_terms(query, 4) if t not in ("vs", "versus")] or [query]
+    items: list = []
+    for q in (" ".join(terms[:3]), " OR ".join(terms[:3])):  # all terms first, then any term
+        r = _get("https://api.github.com/search/repositories", params={"q": q, "per_page": max_results},
+                 headers=headers)
+        try:
+            items = r.json().get("items", [])
+        except ValueError as ex:
+            raise ToolError("InvalidJSON") from ex
+        if items or len(terms) == 1:
+            break
     out = []
     for it in items:
         lic = (it.get("license") or {}).get("spdx_id") or "unknown"
@@ -274,12 +279,14 @@ SEARCH_FUNCS = {
 class ToolBox:
     """Registry the controller calls through; adds caching, timing and offline mode."""
 
-    def __init__(self, enabled: list[str] | tuple[str, ...] | None = None, offline_mode: bool = False):
+    def __init__(self, enabled: list[str] | tuple[str, ...] | None = None, offline_mode: bool = False,
+                 pace: float = 0.0):
         names = list(enabled) if enabled is not None else list(TOOL_SPECS)
         self.enabled = [n for n in TOOL_SPECS if n in names]
         if not any(n in SEARCH_TOOLS for n in self.enabled):
             self.enabled.insert(0, "web_search")
         self.offline = offline_mode
+        self.pace = pace  # artificial delay per offline call, so demos are watchable
         self._cache: dict[tuple[str, str], list[Evidence]] = {}
 
     def available(self, name: str) -> bool:
@@ -291,6 +298,8 @@ class ToolBox:
         key = (tool, query.strip().lower())
         start = time.monotonic()
         if key not in self._cache:
+            if self.offline:
+                time.sleep(self.pace)
             results = offline.search(tool, query) if self.offline else SEARCH_FUNCS[tool](query)
             self._cache[key] = results
         seen, out = set(), []
@@ -303,5 +312,7 @@ class ToolBox:
 
     def fetch(self, url: str) -> tuple[str, str, str, float]:
         start = time.monotonic()
+        if self.offline:
+            time.sleep(self.pace)
         text, status, published = offline.fetch(url) if self.offline else fetch_page(url)
         return text, status, published, time.monotonic() - start
