@@ -95,6 +95,7 @@ class Claim:
     grounding: float = 0.0
     confidence: str = "Low"
     note: str = ""
+    cited: list[str] = field(default_factory=list)  # what the writer originally cited, before auditing
 
     def to_dict(self) -> dict:
         return asdict(self)

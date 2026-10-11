@@ -129,6 +129,28 @@ def heuristic_plan(goal: str, enabled: list[str] | None = None, today: date | No
     return _finalize(plan + [skeptic], enabled)
 
 
+def factcheck_plan(claim: str, enabled: list[str] | None = None) -> list[SubQuestion]:
+    """Plan for checking one claim: supporting evidence, primary sources, and an active debunk search."""
+    enabled = enabled or list(TOOL_SPECS)
+    base = _query_base(claim)
+    short = truncate(claim, 120)
+    plan = [
+        SubQuestion("", f"What evidence supports the claim “{short}”?",
+                    "Collect the strongest evidence in favour first.", ["web_search", "news_search"], [base]),
+        SubQuestion("", f"What do official or primary sources say about “{short}”?",
+                    "Primary sources settle factual questions.", ["web_search", "wikipedia"], [f"{base} official"]),
+    ]
+    if re.search(INTENT_RULES[2][1], claim, re.IGNORECASE) or re.search(r"\b(health|study|cause|effect)", claim,
+                                                                       re.IGNORECASE):
+        plan.append(SubQuestion("", f"What does published research say about “{short}”?",
+                                "Scientific claims need research evidence.", ["arxiv", "web_search"], [base]))
+    plan.append(SubQuestion("", f"Has “{short}” been fact-checked, disputed or debunked?",
+                            "Skeptic pass: actively searches for evidence that the claim is false.",
+                            ["web_search", "news_search"], [f"{base} fact check", f"{base} false myth debunked"],
+                            role="skeptic"))
+    return _finalize(plan, enabled)
+
+
 def _finalize(subquestions: list[SubQuestion], enabled: list[str]) -> list[SubQuestion]:
     searchers = [t for t in enabled if t in SEARCH_TOOLS] or ["web_search"]
     for i, sq in enumerate(subquestions, 1):
@@ -155,13 +177,17 @@ Return JSON only, in this shape:
 GOAL: {goal}"""
 
 
+FACTCHECK_NOTE = ("\nThis is a FACT-CHECK. The goal is a single claim: plan sub-questions that look for evidence FOR it, "
+                  "primary sources about it, and (skeptic) evidence that it is false, outdated or misleading.")
+
+
 def llm_plan(goal: str, llm: LLMClient, enabled: list[str] | None = None,
-             today: date | None = None) -> list[SubQuestion]:
+             today: date | None = None, factcheck: bool = False) -> list[SubQuestion]:
     """Ask the model for a plan; validate it strictly. Raises LLMError if unusable."""
     enabled = enabled or list(TOOL_SPECS)
     tools = "\n".join(f"- {n}: {TOOL_SPECS[n].description}" for n in enabled if n in SEARCH_TOOLS)
-    data = llm.complete_json(PLAN_PROMPT.format(today=(today or date.today()).isoformat(), tools=tools, goal=goal),
-                             max_tokens=1200)
+    prompt = PLAN_PROMPT.format(today=(today or date.today()).isoformat(), tools=tools, goal=goal)
+    data = llm.complete_json(prompt + (FACTCHECK_NOTE if factcheck else ""), max_tokens=1200)
     raw = data.get("subquestions")
     if not isinstance(raw, list):
         raise LLMError("plan missing subquestions")

@@ -165,15 +165,26 @@ def render_markdown(result: dict) -> str:
     rep, m = result["report"], result["metrics"]
     L = link_citations
     out = [
-        "# ProofPilot Research Brief", "",
+        f"# ProofPilot {'Fact-check Report' if result.get('verdict') else 'Research Brief'}", "",
         f"**Goal:** {result['goal']}  ",
         f"**Generated:** {result['created']} · **Synthesis:** {result['synthesis_mode']} · "
         f"**Decision policy:** {result['policy']}  ",
         f"**Evidence strength:** {m['evidence_strength']}/100 · {m['tool_calls']} tool calls · "
         f"{m['unique_domains']} domains · {m['pages_read']} pages read", "",
-        "## Executive answer", "", L(rep["executive_answer"], by_sid), "",
-        "## Answers by sub-question", "",
     ]
+    verdict = result.get("verdict")
+    if verdict:
+        cites = lambda ids: L("".join(f"[{s}]" for s in ids), by_sid) or "none"  # noqa: E731
+        out += ["## Verdict", "", f"### {verdict['icon']} {verdict['verdict']}", "",
+                f"**Claim checked:** {verdict['claim']}", "", verdict["explanation"], "",
+                f"- Supporting sources: {cites(verdict['supporting'])}",
+                f"- Contradicting / debunking sources: {cites(verdict['refuting'])}"]
+        out += [f"  - [{sid}] {why}" for sid, why in verdict.get("refuting_reasons", {}).items()]
+        if verdict.get("before_critic") and verdict["before_critic"] != verdict["verdict"]:
+            out.append(f"- The Critic round changed the verdict from **{verdict['before_critic']}**.")
+        out.append("")
+    out += ["## Executive answer", "", L(rep["executive_answer"], by_sid), "",
+            "## Answers by sub-question", ""]
     for sq in result["subquestions"]:
         cov = sq.get("coverage", {})
         tag = "✅ corroborated" if cov.get("covered") else "⚠️ weak coverage"
@@ -190,6 +201,28 @@ def render_markdown(result: dict) -> str:
         cols, rows = rep["comparison"]["columns"], rep["comparison"]["rows"]
         out += ["", "## Comparison", "", "| " + " | ".join(map(_cell, cols)) + " |", "|" + "---|" * len(cols)]
         out += ["| " + " | ".join(_cell(L(c, by_sid)) for c in r) + " |" for r in rows]
+    if result.get("conflicts"):
+        out += ["", "## Where sources disagree", ""]
+        for c in result["conflicts"]:
+            out.append(f"- **{c['kind']}** — {L('[' + c['a_sid'] + ']', by_sid)} “{_cell(c['a_text'])}” **vs** "
+                       f"{L('[' + c['b_sid'] + ']', by_sid)} “{_cell(c['b_text'])}” → "
+                       f"{'evidence is evenly split' if c['leaning'] == 'unresolved' else 'leans to the ' + c['leaning']}"
+                       + (f" ({c['note']})" if c.get("note") else ""))
+    critic = result.get("critic")
+    if critic:
+        out += ["", "## Critic review", ""]
+        before, after = m.get("evidence_strength_before_critic"), m["evidence_strength"]
+        out.append(f"The Critic agent ({critic['by']}) reviewed the draft"
+                   + (f": *{critic['overall']}*" if critic.get("overall") else ".")
+                   + f" Evidence strength before the review: {before}/100; after follow-up and re-verification: "
+                   f"{after}/100.")
+        if critic["objections"]:
+            out += ["", "| Objection | Follow-up search | Outcome |", "|---|---|---|"]
+            out += [f"| {_cell(o['reason'])} | `{o['tool']}`: {_cell(o['query'])} | {_cell(o['outcome'] or o['status'])}"
+                    + (f" {L(''.join(f'[{x}]' for x in o['new_sources']), by_sid)}" if o["new_sources"] else "")
+                    + " |" for o in critic["objections"]]
+        else:
+            out += ["", "No objections: the draft was approved as is."]
     for title, key in (("Recommended next actions", "next_actions"), ("Unknowns and caveats", "unknowns"),
                        ("Suggested follow-up questions", "follow_up_questions")):
         if rep.get(key):
@@ -204,6 +237,6 @@ def render_markdown(result: dict) -> str:
     out += ["", "## Method", "",
             f"Plan ({result['planner']} planner) → {m['searches']} searches and {m['reads']} page reads chosen by a "
             f"{result['policy']} controller → {m['adaptations']} adaptations → claim verification against source "
-            "text → report. Confidence reflects how many independent domains contain each finding; it is not a "
+            "text → contradiction check → Critic agent review and follow-up → re-verification → report. Confidence reflects how many independent domains contain each finding; it is not a "
             "guarantee of truth. Verify consequential claims at the original source.", ""]
     return "\n".join(out)

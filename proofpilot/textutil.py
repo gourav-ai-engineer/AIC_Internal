@@ -37,9 +37,35 @@ def _meaningful(word: str) -> bool:
     return (len(word) > 2 or word in SHORT_TERMS) and word not in STOPWORDS
 
 
+def stem(word: str) -> str:
+    """Very light plural folding so 'teams' matches 'team' and 'studies' matches 'study'."""
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+        return word[:-1]
+    return word
+
+
 def content_terms(text: str) -> set[str]:
-    """Meaningful lower-case terms (no stopwords, at least 3 characters)."""
-    return {w for w in tokens(text) if _meaningful(w)}
+    """Meaningful lower-case terms (no stopwords, at least 3 characters), plural-folded for matching."""
+    return {stem(w) for w in tokens(text) if _meaningful(w)}
+
+
+_ENTITY = re.compile(r"\b[A-Z][a-zA-Z0-9+#\-]*[a-zA-Z0-9+#]|\b\d+(?:\.\d+)+\b")
+
+
+def entities(text: str) -> set[str]:
+    """Proper-noun-like terms (capitalised words, version numbers) that identify what a claim is about."""
+    found = set()
+    for m in _ENTITY.finditer(text or ""):
+        w = m.group(0).lower()
+        if w not in STOPWORDS and len(w) > 1 and w not in _COMMON_CAPS:
+            found.add(stem(w))
+    return found
+
+
+_COMMON_CAPS = frozenset("""many most some several independent official recent new first one two three according
+however today yesterday researchers experts students users developers studies surveys""".split())
 
 
 def key_terms(text: str, limit: int = 6) -> list[str]:

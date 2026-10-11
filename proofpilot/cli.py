@@ -9,7 +9,8 @@ from pathlib import Path
 from .agent import AgentConfig, ResearchAgent
 from .tools import TOOL_SPECS
 
-ICONS = {"goal": "🎯", "memory": "🧠", "plan": "🗺️", "decide": "🤔", "act": "🔧", "observe": "👁️", "adapt": "🔁",
+ICONS = {"critic": "🕵️", "goal": "🎯", "memory": "🧠", "plan": "🗺️", "decide": "🤔", "act": "🔧", "observe": "👁️",
+         "adapt": "🔁",
          "guardrail": "🛡️", "reflect": "🪞", "synthesize": "✍️", "verify": "✅", "report": "📄"}
 
 
@@ -23,7 +24,10 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(errors="replace")
     ap = argparse.ArgumentParser(prog="proofpilot", description="Evidence-first agentic research from the terminal.")
     ap.add_argument("goal", help="what you want researched")
-    ap.add_argument("--budget", type=int, default=14, help="maximum tool calls (default 14)")
+    ap.add_argument("--budget", type=int, default=16, help="maximum tool calls (default 16)")
+    ap.add_argument("--factcheck", action="store_true", help="treat the goal as a claim and return a verdict")
+    ap.add_argument("--no-critic", action="store_true", help="skip the Critic agent's review round")
+    ap.add_argument("--critic-budget", type=int, default=4, help="tool calls reserved for the Critic (default 4)")
     ap.add_argument("--time-limit", type=float, default=150, help="seconds before the loop stops (default 150)")
     ap.add_argument("--policy", choices=["auto", "llm", "heuristic"], default="auto",
                     help="who chooses the next action (default: LLM if a key is set, else heuristic)")
@@ -37,7 +41,9 @@ def main(argv: list[str] | None = None) -> int:
 
     tools = tuple(t.strip() for t in args.tools.split(",") if t.strip() in TOOL_SPECS)
     config = AgentConfig(budget=args.budget, time_limit=args.time_limit, policy=args.policy, tools=tools,
-                         offline=args.offline, use_memory=not args.no_memory)
+                         offline=args.offline, use_memory=not args.no_memory,
+                         mode="factcheck" if args.factcheck else "auto", critic=not args.no_critic,
+                         critic_budget=args.critic_budget)
     agent = ResearchAgent(config, progress=None if args.quiet else _print_event)
     try:
         result = agent.run(args.goal)

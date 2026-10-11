@@ -15,12 +15,16 @@ from datetime import date, datetime
 from typing import Callable
 
 from . import credibility
+from .conflicts import Conflict, confirm_with_llm, find_conflicts, lean
+from .critic import Objection, heuristic_objections, llm_objections
+from .factcheck import claim_of, is_factcheck, judge
 from .llm import LLMClient, LLMError
 from .memory import Memory
 from .models import Claim, Decision, Evidence, SubQuestion, normalize_url
-from .planner import classify_intents, heuristic_plan, llm_plan, reformulate
+from .planner import _focus as focus_of
+from .planner import classify_intents, factcheck_plan, heuristic_plan, llm_plan, reformulate
 from .report import render_markdown, synthesize_llm, synthesize_local
-from .textutil import clean, content_terms, coverage, truncate
+from .textutil import clean, content_terms, coverage, key_terms, truncate
 from .tools import SEARCH_TOOLS, TOOL_SPECS, ToolBox
 from .verify import CONFIDENCE_ORDER, audit, corroborate
 
@@ -55,7 +59,7 @@ Return JSON only: {{"thought": "1-2 sentences of reasoning", "action": "<tool na
 
 @dataclass
 class AgentConfig:
-    budget: int = 14                 # maximum tool calls (searches + page reads)
+    budget: int = 16                 # maximum tool calls (searches + page reads), Researcher + Critic
     time_limit: float = 150.0        # seconds; the loop stops gracefully when exceeded
     policy: str = "auto"             # "auto" | "llm" | "heuristic" — who picks the next action
     tools: tuple[str, ...] = tuple(TOOL_SPECS)
@@ -63,6 +67,9 @@ class AgentConfig:
     use_memory: bool = True
     max_reads: int = 6
     max_cited: int = 14
+    mode: str = "auto"               # "auto" | "research" | "factcheck" (auto-detects "Fact-check: ...")
+    critic: bool = True              # run the Critic agent's review-and-repair round
+    critic_budget: int = 4           # tool calls reserved for the Critic's follow-up investigations
 
     def __post_init__(self):
         self.budget = max(1, min(int(self.budget), 40))
@@ -70,6 +77,9 @@ class AgentConfig:
         self.max_reads = max(0, int(self.max_reads))
         if self.policy not in ("auto", "llm", "heuristic"):
             self.policy = "auto"
+        if self.mode not in ("auto", "research", "factcheck"):
+            self.mode = "auto"
+        self.critic_budget = max(0, int(self.critic_budget))
 
 
 @dataclass
@@ -111,6 +121,8 @@ class ResearchAgent:
         self.llm_down = self.llm is None
         self.stats = _Stats()
         self.started = time.monotonic()
+        self.factcheck = False
+        self.claim = ""
 
     def log(self, phase: str, message: str, **details) -> dict:
         event = {"i": len(self.events) + 1, "t": round(time.monotonic() - self.started, 1),
@@ -382,12 +394,15 @@ class ResearchAgent:
         enabled = self.toolbox.enabled
         if self.llm and not self.llm_down:
             try:
-                self.subquestions = llm_plan(self.goal, self.llm, enabled, self.today)
+                self.subquestions = llm_plan(self.goal, self.llm, enabled, self.today, factcheck=self.factcheck)
                 return "LLM"
             except LLMError as ex:
                 self._llm_failed("planning", ex)
                 self.stats.adaptations += 1
                 self.log("adapt", "LLM plan unusable; falling back to the rule-based planner.")
+        if self.factcheck:
+            self.subquestions = factcheck_plan(self.claim, enabled)
+            return "fact-check"
         self.subquestions = heuristic_plan(self.goal, enabled, self.today)
         return "rule-based"
 
@@ -429,6 +444,126 @@ class ResearchAgent:
         reads = min(1.0, sum(e.read for e in cited) / n)
         return round(100 * (0.35 * covered / n + 0.25 * cred + 0.25 * conf + 0.15 * reads))
 
+    # ------------------------------------------------------------------ critic agent
+
+    def _extend_cited(self, cited: list[Evidence], new: list[Evidence], limit: int = 6) -> list[Evidence]:
+        """Add the best new sources from the Critic's searches to the citation set, keeping existing IDs stable."""
+        per_domain = Counter(e.domain for e in cited)
+        added = []
+        for e in sorted(new, key=self.rank, reverse=True):
+            if len(added) >= limit:
+                break
+            if per_domain[e.domain] < 2 and self.relevance(e) > 0 and e not in cited:
+                e.sid = f"S{len(cited) + 1}"
+                cited.append(e)
+                per_domain[e.domain] += 1
+                added.append(e)
+        return added
+
+    def _conflicts(self, cited: list[Evidence]) -> list[Conflict]:
+        conflicts = find_conflicts(cited, self.goal)
+        if conflicts and self.llm and not self.llm_down:
+            conflicts = confirm_with_llm(conflicts, self.llm)
+        return conflicts
+
+    def _critic_round(self, cited: list[Evidence], claims: list[Claim], conflicts: list[Conflict], executive: str,
+                      cov: dict[str, dict], verdict: dict | None) -> tuple[list[Claim], list[Conflict], dict]:
+        """The Critic reviews the draft, the Researcher investigates each objection, then everything is re-verified."""
+        searchers = self.searchers()
+        by, overall, objections = "heuristic", "", []
+        if self.llm and not self.llm_down and self.config.policy != "heuristic":
+            try:
+                objections, overall = llm_objections(self.goal, executive, claims, conflicts, self.subquestions, cov,
+                                                     searchers, self.llm)
+                by = "LLM"
+            except LLMError as ex:
+                self._llm_failed("critic review", ex)
+        if by == "heuristic":
+            objections = heuristic_objections(self.goal, classify_intents(self.goal), claims, conflicts,
+                                              self.subquestions, cov, cited, searchers, self.today)
+        if verdict and verdict["verdict"] in ("Unverified", "Weakly supported", "Disputed") and searchers:
+            objections.insert(0, Objection("gap", f"The verdict is only “{verdict['verdict']}”; searching for the "
+                                           "claim itself to find decisive evidence.",
+                                           truncate(self.claim, 110), searchers[0], "verdict",
+                                           self.subquestions[0].id))
+        fresh = []
+        for o in objections:
+            sq = next((q for q in self.subquestions if q.id == o.subquestion), None) or \
+                min(self.subquestions, key=lambda q: self.coverage(q)["domains"])
+            o.subquestion = sq.id
+            if o.tool not in searchers:
+                o.tool = searchers[0] if searchers else ""
+            if o.tool and not any(q.attempted(o.tool, o.query) for q in self.subquestions):
+                fresh.append(o)
+        objections = fresh[:3]
+        info = {"by": by, "overall": overall, "objections": [], "upgrades": [], "added_sources": []}
+        if not objections:
+            self.log("critic", "Critic agent reviewed the draft and approved it: nothing that more evidence could fix.")
+            return claims, conflicts, info
+        self.log("critic", f"Critic agent ({by}) challenged the draft with {len(objections)} objection(s)"
+                 + (f": {overall}" if overall else ""), objections=[o.reason for o in objections])
+
+        start_keys = set(self.evidence)
+        found_by: dict[int, set[str]] = {}
+        for n, o in enumerate(objections):
+            if self.calls >= self.config.budget or time.monotonic() - self.started > self.config.time_limit:
+                o.status, o.outcome = "skipped", "budget or time limit reached"
+                continue
+            before = set(self.evidence)
+            d = Decision(o.tool, f"Critic objection: {o.reason}", o.subquestion, query=o.query, by="critic")
+            self.stats.decisions["critic"] += 1
+            self.log("decide", d.thought, action=d.action, by="critic", subquestion=d.subquestion, query=d.query)
+            self.act(d)
+            new = [e for k, e in self.evidence.items() if k not in before and not e.read and
+                   e.status == "search-result"]
+            if new and self.calls < self.config.budget and self.toolbox.available("fetch_page"):
+                e = max(new, key=self.rank)
+                d = Decision("fetch_page", f"Critic: reading the most relevant new source ({e.domain}) to test the "
+                             "objection.", e.subquestion, url=e.url, by="critic")
+                self.log("decide", d.thought, action=d.action, by="critic", subquestion=d.subquestion, url=d.url)
+                self.act(d)
+            o.status = "investigated"
+            found_by[n] = set(self.evidence) - before
+
+        added = self._extend_cited(cited, [e for k, e in self.evidence.items() if k not in start_keys])
+        by_sid = {e.sid: e for e in cited}
+        old = [c.confidence for c in claims]
+        claims = [audit(c.text, c.cited or c.sources, by_sid) for c in claims]
+        upgrades = [{"claim": f"C{i}", "text": truncate(c.text, 140), "before": b, "after": c.confidence}
+                    for i, (b, c) in enumerate(zip(old, claims), 1)
+                    if CONFIDENCE_ORDER[c.confidence] > CONFIDENCE_ORDER[b]]
+        old_pairs = {tuple(sorted((c.a_sid, c.b_sid))) for c in conflicts}
+        conflicts = self._conflicts(cited)
+        new_cov = {sq.id: self.coverage(sq) for sq in self.subquestions}
+        sid_of = {normalize_url(e.url): e.sid for e in cited}
+        for n, o in enumerate(objections):
+            if o.status != "investigated":
+                continue
+            o.new_sources = sorted((sid_of[k] for k in found_by.get(n, ()) if k in sid_of), key=lambda s: int(s[1:]))
+            if o.target.startswith("C") and o.target[1:].isdigit() and int(o.target[1:]) <= len(claims):
+                i = int(o.target[1:])
+                up = next((u for u in upgrades if u["claim"] == o.target), None)
+                o.outcome = (f"confirmed — {o.target} upgraded {up['before']} → {up['after']}" if up else
+                             f"no independent confirmation found; {o.target} stays {claims[i - 1].confidence}")
+            elif "~" in o.target:
+                pair = tuple(sorted(o.target.split("~")))
+                still = next((c for c in conflicts if tuple(sorted((c.a_sid, c.b_sid))) == pair), None)
+                leaning = lean(still, cited).leaning if still else ""
+                o.outcome = (("still disputed; sources are evenly split" if leaning == "unresolved" else
+                              f"still disputed; evidence now leans to the {leaning}") if still else
+                             "no longer flagged after re-verification" if pair in old_pairs else "investigated")
+            elif o.target in new_cov:
+                o.outcome = ("now corroborated by 2+ domains" if new_cov[o.target]["covered"] else
+                             f"still weak ({new_cov[o.target]['domains']} domain(s))")
+            else:
+                o.outcome = f"added {len(o.new_sources)} new cited source(s)" if o.new_sources else \
+                    "no new usable sources found"
+        info.update(objections=[o.to_dict() for o in objections], upgrades=upgrades,
+                    added_sources=[e.sid for e in added])
+        self.log("critic", f"Critic round complete: {len(upgrades)} finding(s) upgraded, {len(added)} new cited "
+                 f"source(s), {len(conflicts)} open disagreement(s).", upgrades=upgrades)
+        return claims, conflicts, info
+
     # ------------------------------------------------------------------ main entry point
 
     def run(self, goal: str) -> dict:
@@ -437,8 +572,14 @@ class ResearchAgent:
             raise ValueError("Please enter a research goal of at least 8 characters.")
         self._reset(truncate(goal, 500))
         cfg = self.config
+        self.factcheck = cfg.mode == "factcheck" or (cfg.mode == "auto" and is_factcheck(self.goal))
+        self.claim = claim_of(self.goal) if self.factcheck else ""
+        reserve = min(cfg.critic_budget, cfg.budget // 3) if cfg.critic else 0
+        if self.toolbox.offline:
+            self.toolbox.offline_topic = " ".join(key_terms(self.claim, 3)) if self.factcheck else focus_of(self.goal)
         mode = "offline demo (synthetic sources)" if cfg.offline else "live web"
-        self.log("goal", f"New mission: \"{self.goal}\"", budget=cfg.budget, time_limit=cfg.time_limit, mode=mode,
+        self.log("goal", f"New {'fact-check' if self.factcheck else 'research'} mission: \"{self.goal}\"",
+                 budget=cfg.budget, critic_reserve=reserve, time_limit=cfg.time_limit, mode=mode,
                  llm=self.llm.label if self.llm else None, intents=classify_intents(self.goal))
         recalled = self._recall()
         planner = self._plan()
@@ -448,8 +589,9 @@ class ResearchAgent:
         self._attach_seeds()
 
         while True:
-            if self.calls >= cfg.budget:
-                self._guardrail(f"Tool budget of {cfg.budget} calls used up; moving to verification.")
+            if self.calls >= cfg.budget - reserve:
+                self._guardrail(f"Researcher budget of {cfg.budget - reserve} calls used up"
+                                + (f" ({reserve} reserved for the Critic)" if reserve else "") + "; moving on.")
                 break
             if time.monotonic() - self.started > cfg.time_limit:
                 self._guardrail(f"Time limit of {int(cfg.time_limit)}s reached; moving to verification.")
@@ -481,6 +623,7 @@ class ResearchAgent:
                 self._llm_failed("synthesis", ex)
                 self.stats.adaptations += 1
                 self.log("adapt", "LLM synthesis failed; using the extractive synthesizer instead.")
+        llm_report = report is not None
         if report:
             claims = [audit(f["claim"], f["sources"], by_sid) for f in report["findings"]]
             claims.sort(key=lambda c: CONFIDENCE_ORDER[c.confidence], reverse=True)
@@ -490,10 +633,32 @@ class ResearchAgent:
             self.log("synthesize", f"Extractive brief built from {len(cited)} cited sources")
         tally = Counter(c.confidence for c in claims)
         fixes = sum(1 for c in claims if "removed" in c.note or "did not clearly" in c.note)
+        conflicts = self._conflicts(cited)
         self.log("verify", f"Checked {len(claims)} findings against source text: "
                  + ", ".join(f"{tally[k]} {k.lower()}" for k in CONFIDENCE_VALUE if tally[k])
-                 + (f"; corrected citations on {fixes}" if fixes else ""),
-                 confidence=dict(tally))
+                 + (f"; corrected citations on {fixes}" if fixes else "")
+                 + f"; {len(conflicts)} disagreement(s) between sources", confidence=dict(tally))
+        verdict = judge(self.claim, cited) if self.factcheck else None
+        if verdict:
+            self.log("verify", f"Preliminary verdict: {verdict['icon']} {verdict['verdict']} — {verdict['explanation']}")
+        strength_before = self._evidence_strength(cited, claims, covered)
+
+        critic_info = None
+        if cfg.critic:
+            claims, conflicts, critic_info = self._critic_round(cited, claims, conflicts, report["executive_answer"],
+                                                                cov, verdict)
+            cov = {sq.id: self.coverage(sq) for sq in self.subquestions}
+            covered = sum(c["covered"] for c in cov.values())
+            claims.sort(key=lambda c: CONFIDENCE_ORDER[c.confidence], reverse=True)
+            if not llm_report:
+                report = synthesize_local(self.goal, self.subquestions, cited, claims, cov)
+            if self.factcheck:
+                before = verdict["verdict"]
+                verdict = judge(self.claim, cited)
+                verdict["before_critic"] = before
+                self.log("verify", f"Final verdict: {verdict['icon']} {verdict['verdict']}"
+                         + (f" (was {before} before the Critic round)" if before != verdict["verdict"] else ""))
+        tally = Counter(c.confidence for c in claims)
 
         strength = self._evidence_strength(cited, claims, covered)
         decisions = self.stats.decisions
@@ -502,9 +667,10 @@ class ResearchAgent:
         cited_keys = {normalize_url(e.url) for e in cited}
         others = sorted((e for k, e in self.evidence.items() if k not in cited_keys), key=self.rank, reverse=True)
         result = {
-            "version": "2.0",
+            "version": "2.1",
             "run_id": datetime.now().strftime("%Y%m%d-%H%M%S"),
             "goal": self.goal,
+            "task": "fact-check" if self.factcheck else "research",
             "created": datetime.now().astimezone().isoformat(timespec="seconds"),
             "intents": classify_intents(self.goal),
             "mode": mode,
@@ -516,10 +682,14 @@ class ResearchAgent:
             "subquestions": [{**sq.to_dict(), "coverage": cov[sq.id]} for sq in self.subquestions],
             "evidence": [e.to_dict() for e in cited + others],
             "claims": [c.to_dict() for c in claims],
+            "conflicts": [c.to_dict() for c in conflicts],
+            "critic": critic_info,
+            "verdict": verdict,
             "report": report,
             "memory": {"recalled": [{k: r[k] for k in ("id", "goal", "similarity")} for r in recalled]},
             "metrics": {
                 "evidence_strength": strength,
+                "evidence_strength_before_critic": strength_before,
                 "tool_calls": self.calls,
                 "budget": cfg.budget,
                 "searches": self.stats.searches,
@@ -531,6 +701,9 @@ class ResearchAgent:
                 "subquestions_covered": covered,
                 "claims": len(claims),
                 "high_confidence_claims": tally["High"],
+                "conflicts": len(conflicts),
+                "critic_objections": len(critic_info["objections"]) if critic_info else 0,
+                "claims_upgraded": len(critic_info["upgrades"]) if critic_info else 0,
                 "adaptations": self.stats.adaptations,
                 "guardrails": self.stats.guardrails,
                 "llm_calls": self.llm.calls if self.llm else 0,
@@ -539,7 +712,10 @@ class ResearchAgent:
             "events": self.events,
         }
         result["markdown"] = render_markdown(result)
-        self.log("report", f"Brief ready · evidence strength {strength}/100 · {len(cited)} cited sources")
+        delta = strength - strength_before
+        self.log("report", f"Brief ready · evidence strength {strength}/100"
+                 + (f" ({'+' if delta >= 0 else ''}{delta} after the Critic round)" if cfg.critic else "")
+                 + f" · {len(cited)} cited sources")
         if self.memory:
             saved = self.memory.save(result)
             self.log("memory", "Saved this run to long-term memory." if saved else "Memory not writable; run not saved.")

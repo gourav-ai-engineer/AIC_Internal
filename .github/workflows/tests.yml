@@ -18,5 +18,7 @@ jobs:
       - run: python -m unittest discover -v
         env:
           PROOFPILOT_LLM: "off"
+      - name: Verifier benchmark
+        run: python -m proofpilot.evaluate
       - name: Offline end-to-end CLI run
         run: python -m proofpilot "Compare open-source agent frameworks for a student project" --offline --no-memory --quiet --out brief.md && head -20 brief.md

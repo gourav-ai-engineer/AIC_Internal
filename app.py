@@ -9,12 +9,13 @@ import streamlit as st
 from proofpilot import AgentConfig, ResearchAgent, __version__
 from proofpilot.llm import LLMClient
 from proofpilot.memory import Memory
+from proofpilot.qa import answer as ask_evidence
 from proofpilot.report import BADGES
 from proofpilot.tools import TOOL_SPECS, ToolBox
 
 st.set_page_config(page_title="ProofPilot · Self-verifying research agent", page_icon="🧭", layout="wide")
 
-ICONS = {"goal": "🎯", "memory": "🧠", "plan": "🗺️", "decide": "🤔", "act": "🔧", "observe": "👁️", "adapt": "🔁",
+ICONS = {"critic": "🕵️", "goal": "🎯", "memory": "🧠", "plan": "🗺️", "decide": "🤔", "act": "🔧", "observe": "👁️", "adapt": "🔁",
          "guardrail": "🛡️", "reflect": "🪞", "synthesize": "✍️", "verify": "✅", "report": "📄"}
 EXAMPLES = [
     "Compare LangGraph vs CrewAI vs AutoGen for building a multi-agent study tutor as a student project.",
@@ -22,6 +23,12 @@ EXAMPLES = [
     "Investigate how small language models can support multilingual education in India using research papers and official sources.",
     "Should a beginner learn Rust or Go in 2026 for backend development? Include job market and learning curve.",
     "What are the health effects of intermittent fasting according to recent studies?",
+]
+FACTCHECK_EXAMPLES = [
+    "Fact-check: The Great Wall of China is visible from space with the naked eye.",
+    "Fact-check: Intermittent fasting causes significant muscle loss in adults.",
+    "Fact-check: Python is the most popular programming language in 2026.",
+    "Fact-check: Drinking coffee causes dehydration.",
 ]
 PROVIDERS = {"Gemini (free tier)": "gemini", "Groq (free tier)": "groq", "OpenAI": "openai", "Ollama (local)": "ollama"}
 
@@ -66,7 +73,7 @@ st.markdown("""
   hunts for counter-evidence, and checks every claim against the text before you see it.</div>
   <div class="pp-loop"><span>🎯 Goal</span><span>🧠 Recall</span><span>🗺️ Plan</span><span>🤔 Decide</span>
   <span>🔧 Act</span><span>👁️ Observe</span><span>🔁 Adapt</span><span>🪞 Reflect</span><span>✅ Verify</span>
-  <span>📄 Report</span></div>
+  <span>🕵️ Critique</span><span>📄 Report</span></div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -99,9 +106,13 @@ with st.sidebar:
     st.subheader("🧰 Tools & guardrails")
     tools = st.multiselect("Enabled tools", list(TOOL_SPECS), default=list(TOOL_SPECS),
                            help="\n".join(f"{n}: {s.description}" for n, s in TOOL_SPECS.items()))
-    budget = st.slider("Tool-call budget", 4, 30, 14, help="Hard cap on searches + page reads.")
+    budget = st.slider("Tool-call budget", 4, 30, 16, help="Hard cap on searches + page reads (Researcher + Critic).")
     max_reads = st.slider("Max full-page reads", 0, 10, 6)
     time_limit = st.slider("Time limit (seconds)", 30, 300, 150, step=10)
+    critic = st.toggle("🕵️ Critic agent", value=True,
+                       help="A second agent reviews the draft, raises objections and sends the Researcher back to "
+                            "fix them before you see the report.")
+    critic_budget = st.slider("Critic budget (tool calls)", 0, 8, 4, disabled=not critic)
     use_memory = st.toggle("Long-term memory", value=True, help="Recall related past runs and reuse trusted sources.")
     memory = Memory() if use_memory else None
     if memory:
@@ -121,10 +132,18 @@ with st.sidebar:
 
 # ----------------------------------------------------------------------------- run
 
-st.subheader("What should the agent research?")
-example = st.selectbox("Try an example (optional)", ["Write my own"] + EXAMPLES)
-goal = st.text_area("Research goal", value="" if example == "Write my own" else example, height=90,
-                    placeholder="e.g. Compare free vector databases for a student RAG project")
+st.subheader("What should the agent do?")
+task = st.radio("Mission type", ["🔬 Research a topic", "⚖️ Fact-check a claim"], horizontal=True,
+                help="Fact-check mode returns an evidence-weighted verdict: Supported, Disputed, Refuted or Unverified.")
+factcheck = task.startswith("⚖️")
+if factcheck and offline:
+    st.caption("ℹ️ Offline demo sources are generic, so fact-check verdicts will usually be *Unverified*. That is the "
+               "honest answer. Use live mode for real verdicts.")
+example = st.selectbox("Try an example (optional)", ["Write my own"] + (FACTCHECK_EXAMPLES if factcheck else EXAMPLES))
+goal = st.text_area("Claim to check" if factcheck else "Research goal",
+                    value="" if example == "Write my own" else example, height=90,
+                    placeholder="e.g. Fact-check: Bats are blind" if factcheck else
+                    "e.g. Compare free vector databases for a student RAG project")
 c1, c2 = st.columns([1, 3])
 run_clicked = c1.button("▶ Launch agent", type="primary", key="run")
 c2.caption("Web content is treated as untrusted data, never as instructions. "
@@ -144,10 +163,12 @@ if run_clicked:
         st.error("Enable at least one tool.")
     else:
         config = AgentConfig(budget=budget, time_limit=time_limit, policy=policy, tools=tuple(tools),
-                             offline=offline, use_memory=use_memory, max_reads=max_reads)
+                             offline=offline, use_memory=use_memory, max_reads=max_reads,
+                             mode="factcheck" if factcheck else "research", critic=critic,
+                             critic_budget=critic_budget)
         progress_bar = st.progress(0.0, text="Starting…")
         with st.status("Agent is working…", expanded=True) as status:
-            toolbox = ToolBox(config.tools, offline_mode=offline, pace=0.35 if offline else 0.0)
+            toolbox = ToolBox(config.tools, offline_mode=offline, pace=float(os.getenv("PROOFPILOT_DEMO_PACE", "0.35")) if offline else 0.0)
             agent = ResearchAgent(config, llm=None if offline else llm, memory=memory, toolbox=toolbox)
 
             def on_event(e: dict) -> None:
@@ -168,6 +189,12 @@ if run_clicked:
 
 
 # ----------------------------------------------------------------------------- results
+
+
+def link_citations_md(text: str, urls: dict[str, str]) -> str:
+    import re
+    return re.sub(r"\[(S\d+)\]", lambda mm: f"[\\[{mm.group(1)}\\]]({urls[mm.group(1)]})" if mm.group(1) in urls
+                  else mm.group(0), text)
 
 
 def dot_escape(text: str, limit: int = 42) -> str:
@@ -203,17 +230,32 @@ if r:
     if r["mode"].startswith("offline"):
         st.warning("Offline demo: every source below is synthetic (reserved `.example` domains). "
                    "Switch off Offline demo mode for real research.")
+    v = r.get("verdict")
+    if v:
+        colours = {"🟢": "rgba(34,197,94,.16)", "🟡": "rgba(234,179,8,.18)", "🟠": "rgba(249,115,22,.18)",
+                   "🔴": "rgba(239,68,68,.18)", "⚪": "rgba(148,163,184,.18)"}
+        from html import escape
+        st.markdown(f"<div style='padding:1rem 1.2rem;border-radius:14px;background:{colours[v['icon']]};"
+                    f"border:1px solid rgba(128,128,128,.3);margin:.4rem 0 1rem'>"
+                    f"<div style='font-size:.75rem;letter-spacing:.12em;opacity:.7'>EVIDENCE VERDICT</div>"
+                    f"<div style='font-size:1.8rem;font-weight:700'>{v['icon']} {escape(v['verdict'])}</div>"
+                    f"<div><b>Claim:</b> {escape(v['claim'])}</div><div style='opacity:.85'>{escape(v['explanation'])}"
+                    f"</div></div>", unsafe_allow_html=True)
     m = r["metrics"]
     cols = st.columns(6)
-    cols[0].metric("Evidence strength", f"{m['evidence_strength']}/100")
+    before = m.get("evidence_strength_before_critic")
+    cols[0].metric("Evidence strength", f"{m['evidence_strength']}/100",
+                   delta=(f"{m['evidence_strength'] - before:+d} from Critic" if before is not None and r.get("critic")
+                          else None))
     cols[1].metric("Tool calls", f"{m['tool_calls']}/{m['budget']}")
     cols[2].metric("Sources (cited)", f"{m['unique_sources']} ({m['cited_sources']})")
     cols[3].metric("Independent domains", m["unique_domains"])
     cols[4].metric("Verified findings", f"{m['claims']} · {m['high_confidence_claims']} high")
-    cols[5].metric("Adaptations · guards", f"{m['adaptations']} · {m['guardrails']}")
+    cols[5].metric("Critic · disputes", f"{m.get('critic_objections', 0)} · {m.get('conflicts', 0)}",
+                   help="Objections raised by the Critic agent · disagreements found between sources")
 
-    tabs = st.tabs(["📄 Brief", "✅ Verified findings", "🔎 Evidence ledger", "🧠 Agent trace",
-                    "🗺️ Plan & coverage", "🕸️ Evidence map"])
+    tabs = st.tabs(["📄 Brief", "✅ Verified findings", "🕵️ Critic & disputes", "🔎 Evidence ledger",
+                    "🧠 Agent trace", "🗺️ Plan & coverage", "🕸️ Evidence map"])
     with tabs[0]:
         st.markdown(r["markdown"])
         d1, d2 = st.columns(2)
@@ -238,6 +280,40 @@ if r:
                 if c["note"]:
                     st.caption(f"Verifier: {c['note']}")
     with tabs[2]:
+        critic_info = r.get("critic")
+        urls = {e["sid"]: e["url"] for e in r["evidence"] if e["sid"]}
+        link = lambda ids: " ".join(f"[{s}]({urls[s]})" for s in ids if s in urls)  # noqa: E731
+        st.markdown("#### 🕵️ Critic agent review")
+        if not critic_info:
+            st.info("The Critic agent was switched off for this run.")
+        else:
+            if before is not None:
+                st.markdown(f"Evidence strength **{before} → {m['evidence_strength']}** after the Critic's follow-up "
+                            f"and re-verification · reviewer: {critic_info['by']}")
+            if critic_info.get("overall"):
+                st.caption(f"Critic's verdict on the draft: {critic_info['overall']}")
+            if not critic_info["objections"]:
+                st.success("The Critic approved the draft: nothing that more evidence could fix.")
+            for o in critic_info["objections"]:
+                with st.container(border=True):
+                    st.markdown(f"**{o['kind'].replace('_', ' ').title()}** — {o['reason']}")
+                    st.caption(f"Follow-up: `{o['tool']}` “{o['query']}” · status: {o['status']}")
+                    st.markdown(f"**Outcome:** {o['outcome'] or '—'} {link(o['new_sources'])}")
+            for u in critic_info.get("upgrades", []):
+                st.success(f"{u['claim']} upgraded {u['before']} → {u['after']}: {u['text']}")
+        st.markdown("#### ⚖️ Where sources disagree")
+        if not r.get("conflicts"):
+            st.info("No contradictions were detected between the cited sources.")
+        for c in r.get("conflicts", []):
+            with st.container(border=True):
+                a, b = st.columns(2)
+                a.markdown(f"**[{c['a_sid']}]({urls.get(c['a_sid'], '')})** · backed by {len(c['a_support'])} "
+                           f"source(s)\n\n> {c['a_text']}")
+                b.markdown(f"**[{c['b_sid']}]({urls.get(c['b_sid'], '')})** · backed by {len(c['b_support'])} "
+                           f"source(s)\n\n> {c['b_text']}")
+                lean_text = "evidence is evenly split" if c["leaning"] == "unresolved" else f"leans to the {c['leaning']}"
+                st.caption(f"Type: {c['kind']} · {lean_text}" + (f" · {c['note']}" if c.get("note") else ""))
+    with tabs[3]:
         rows = [{"ID": e["sid"] or "—", "Title": e["title"], "URL": e["url"], "Type": e["source_type"],
                  "Credibility": e["credibility"], "Q": e["subquestion"], "Tool": e["tool"],
                  "Read": "✅" if e["page_text"] else "—", "Published": e["published"],
@@ -252,7 +328,7 @@ if r:
                 st.markdown(f"**URL:** [{e['url']}]({e['url']})  \n**Found by:** `{e['tool']}` for {e['subquestion']} "
                             f"with query “{e['query']}”  \n**Status:** {e['status']}")
                 st.write(e["page_text"][:2000] if e["page_text"] else e["snippet"])
-    with tabs[3]:
+    with tabs[4]:
         phases = [e["phase"] for e in r["events"]]
         st.caption(" · ".join(f"{ICONS.get(p, '•')} {p}: {phases.count(p)}" for p in dict.fromkeys(phases)))
         show_details = st.toggle("Show raw event data", value=False)
@@ -261,7 +337,7 @@ if r:
             extra = {k: v for k, v in e.items() if k not in ("i", "t", "time", "phase", "message")}
             if show_details and extra:
                 st.json(extra, expanded=False)
-    with tabs[4]:
+    with tabs[5]:
         for sq in r["subquestions"]:
             cov = sq["coverage"]
             with st.container(border=True):
@@ -274,9 +350,25 @@ if r:
                     st.caption(f"Why: {sq['rationale']}")
                 st.caption("Tools: " + ", ".join(sq["tools"]) + " · Tried: " +
                            (", ".join(f"`{t.replace('::', ': ')}`" for t in sq["tried"]) or "nothing"))
-    with tabs[5]:
+    with tabs[6]:
         st.caption("Goal → sub-questions (green = corroborated) → cited sources (coloured by credibility).")
         st.graphviz_chart(evidence_map(r))
+    st.markdown("---")
+    st.subheader("💬 Ask the evidence")
+    st.caption("Ask a follow-up question. Answers come only from this run's cited sources, and every cited sentence "
+               "is checked against them.")
+    history = st.session_state.setdefault("qa", {}).setdefault(r["run_id"], [])
+    with st.form(key=f"ask-form-{r['run_id']}", clear_on_submit=True):
+        q = st.text_input("Your question", placeholder="e.g. Which option is easiest for beginners?")
+        asked = st.form_submit_button("Ask")
+    if asked and q.strip():
+        history.insert(0, {"q": q.strip(), **ask_evidence(q.strip(), r, None if offline else llm)})
+    for h in history:
+        with st.container(border=True):
+            st.markdown(f"**Q:** {h['q']}")
+            st.markdown(link_citations_md(h["answer"], urls))
+            st.caption(f"Confidence: {BADGES.get(h['confidence'], h['confidence'])} · answered by {h['mode']}"
+                       + (f" · {h['note']}" if h.get("note") else ""))
 else:
     st.info("Pick an example or write a goal, then press **Launch agent**. No API key? It still works — and "
             "Offline demo mode works without internet.")

@@ -287,6 +287,7 @@ class ToolBox:
             self.enabled.insert(0, "web_search")
         self.offline = offline_mode
         self.pace = pace  # artificial delay per offline call, so demos are watchable
+        self.offline_topic: str | None = None  # keeps synthetic sources on the mission's topic
         self._cache: dict[tuple[str, str], list[Evidence]] = {}
 
     def available(self, name: str) -> bool:
@@ -300,7 +301,8 @@ class ToolBox:
         if key not in self._cache:
             if self.offline:
                 time.sleep(self.pace)
-            results = offline.search(tool, query) if self.offline else SEARCH_FUNCS[tool](query)
+            results = offline.search(tool, query, topic=self.offline_topic) if self.offline else \
+                SEARCH_FUNCS[tool](query)
             self._cache[key] = results
         seen, out = set(), []
         for e in self._cache[key]:

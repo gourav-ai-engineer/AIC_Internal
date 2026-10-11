@@ -16,8 +16,10 @@ class FakeLLM:
 
     label = "Fake · test-model"
 
-    def __init__(self, decisions=None, fail=False, plan=None, synthesis=None):
+    def __init__(self, decisions=None, fail=False, plan=None, synthesis=None, critic=None, qa=None):
         self.decisions = list(decisions or [])
+        self.critic = critic
+        self.qa = qa
         self.fail = fail
         self.plan = plan
         self.synthesis = synthesis
@@ -55,6 +57,14 @@ class FakeLLM:
                 "next_actions": ["Benchmark two options."], "unknowns": ["Pricing."],
                 "follow_up_questions": ["Which is cheapest?"],
             }
+        if "Critic agent" in prompt:
+            return self.critic or {"overall": "One finding needs confirmation.", "objections": [
+                {"kind": "single_source", "reason": "C1 needs a second source.", "target": "C1",
+                 "query": "vector database embeddings similarity", "tool": "web_search"}]}
+        if "contradict each other" in prompt:
+            return {"pairs": []}
+        if "follow-up question" in prompt:
+            return self.qa or {"answerable": True, "answer": "Vector databases store embeddings [S1]."}
         raise AssertionError("unexpected prompt")
 
 

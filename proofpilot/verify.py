@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 
 from .models import Claim, Evidence
-from .textutil import content_terms, coverage, jaccard, sentences
+from .textutil import content_terms, coverage, entities, jaccard, sentences
 
 GROUNDED = 0.45  # minimum share of a claim's terms a source must contain to count as support
 CONFIDENCE_ORDER = {"High": 3, "Medium": 2, "Low": 1, "Unsupported": 0}
@@ -21,8 +21,20 @@ def support_score(claim: str, text: str) -> float:
     terms = content_terms(claim)
     if not terms or not text:
         return 0.0
-    best = max((coverage(terms, content_terms(s)) for s in sentences(text)), default=0.0)
-    return round(0.65 * best + 0.35 * coverage(terms, content_terms(text)), 3)
+    names = entities(claim)
+    predicate = terms - names  # what is said about the subject, e.g. {"visible", "space"}
+    best, best_pred = 0.0, 0.0
+    for s in sentences(text):
+        st = content_terms(s)
+        cov = coverage(terms, st)
+        if cov > best:
+            best, best_pred = cov, coverage(predicate, st)
+    score = 0.65 * best + 0.35 * coverage(terms, content_terms(text))
+    if names and not names & content_terms(text):  # e.g. a source about Go cannot confirm a claim about Rust
+        score *= 0.5
+    if names and len(predicate) >= 2 and best_pred < 0.4:  # mentions the subject but not what is claimed about it
+        score *= 0.6
+    return round(score, 3)
 
 
 def confidence(domains: int, grounding: float, mean_credibility: float) -> str:
@@ -62,7 +74,7 @@ def audit(text: str, cited: list[str], by_sid: dict[str, Evidence]) -> Claim:
         notes.append(f"also corroborated by {', '.join(extra)}")
     ordered = sorted(supporting or valid, key=lambda s: int(s[1:]))
     return Claim(text, ordered, domains, round(grounding, 2), confidence(domains, grounding, cred),
-                 "; ".join(notes))
+                 "; ".join(notes), list(dict.fromkeys(cited)))
 
 
 def _candidate_sentences(e: Evidence, goal_terms: set[str]) -> list[tuple[float, str]]:
